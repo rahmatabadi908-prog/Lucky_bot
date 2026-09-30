@@ -1,8 +1,10 @@
 import asyncio
 import logging
 import sqlite3
+import os
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
-from aiogram.filters import CommandStart, Command
+from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -57,11 +59,10 @@ def get_main_keyboard():
     kb = [
         [KeyboardButton(text="🎲 بازی تاس"), KeyboardButton(text="👤 حساب کاربری")],
         [KeyboardButton(text="💳 شارژ حساب"), KeyboardButton(text="🏧 برداشت وجه")],
-        [KeyboardButton(text="👥 دعوت دوستان"), KeyboardButton(text="📢 کانال اطلاع‌‌رسانی")]
+        [KeyboardButton(text="👥 دعوت دوستان"), KeyboardButton(text="📢 کانال اطلاع‌رسانی")]
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
-# --- توابع کمکی دیتابیس ---
 def get_user(user_id):
     cursor.execute("SELECT user_id, balance, required_turnover, invited_count, referrer_id FROM users WHERE user_id = ?", (user_id,))
     res = cursor.fetchone()
@@ -83,20 +84,16 @@ def add_required_turnover(user_id, amount):
     cursor.execute("UPDATE users SET required_turnover = required_turnover + ? WHERE user_id = ?", (amount, user_id))
     conn.commit()
 
-# --- شروع ساخت ربات ---
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# --- دستور /start ---
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     user_id = message.from_user.id
     args = message.text.split()
-    
     user = get_user(user_id)
     
-    # سیستم زیرمجموعه‌گیری
     if len(args) > 1 and args[1].isdigit():
         referrer_id = int(args[1])
         if referrer_id != user_id and user[4] is None:
@@ -110,15 +107,9 @@ async def cmd_start(message: Message):
                 except Exception:
                     pass
 
-    welcome_text = (
-        f"سلام {message.from_user.first_name} عزیز! 🎲\n\n"
-        f"به ربات شرط‌بندی تاس خوش آمدید.\n"
-        f"می‌توانید شانس خود را در حالت‌های زوج، فرد یا عدد دقیق آزمایش کنید.\n\n"
-        f"👇 از کیبورد زیر استفاده کنید:"
-    )
+    welcome_text = f"سلام {message.from_user.first_name} عزیز! 🎲\n\nبه ربات شرط‌بندی تاس خوش آمدید.\n👇 از کیبورد زیر استفاده کنید:"
     await message.answer(welcome_text, reply_markup=get_main_keyboard())
 
-# --- دکمه‌های اصلی ---
 @dp.message(F.text == "📢 کانال اطلاع‌رسانی")
 async def channel_info(message: Message):
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="عضویت در کانال", url=CHANNEL_LINK)]])
@@ -127,28 +118,16 @@ async def channel_info(message: Message):
 @dp.message(F.text == "👤 حساب کاربری")
 async def user_profile(message: Message):
     _, balance, turnover, invited, _ = get_user(message.from_user.id)
-    text = (
-        f"👤 **حساب کاربری شما**\n\n"
-        f"🆔 شناسه: `{message.from_user.id}`\n"
-        f"💰 موجودی: {balance:,} تومان\n"
-        f"🔄 گردش مالی باقی‌مانده جهت برداشت: {turnover:,} تومان\n"
-        f"👥 تعداد دعوت‌ها: {invited} از {MAX_INVITES} نفر"
-    )
+    text = f"👤 **حساب کاربری شما**\n\n🆔 شناسه: `{message.from_user.id}`\n💰 موجودی: {balance:,} تومان\n🔄 گردش مالی باقی‌مانده جهت برداشت: {turnover:,} تومان\n👥 تعداد دعوت‌ها: {invited} از {MAX_INVITES} نفر"
     await message.answer(text, parse_mode="Markdown")
 
 @dp.message(F.text == "👥 دعوت دوستان")
 async def refer_friends(message: Message):
     _, _, _, invited, _ = get_user(message.from_user.id)
     ref_link = f"https://t.me/{BOT_USERNAME}?start={message.from_user.id}"
-    text = (
-        f"🎁 **سیستم دعوت دوستان**\n\n"
-        f"بابت هر دعوتی که انجام دهید مبلغ {INVITE_BONUS:,} تومان پاداش دریافت می‌کنید.\n"
-        f"سقف دعوت: ۴ نفر (دعوت‌های شما: {invited}/{MAX_INVITES})\n\n"
-        f"🔗 لینک اختصاصی شما:\n`{ref_link}`"
-    )
+    text = f"🎁 **سیستم دعوت دوستان**\n\nبابت هر دعوتی که انجام دهید مبلغ {INVITE_BONUS:,} تومان پاداش دریافت می‌کنید.\nسقف دعوت: ۴ نفر ({invited}/{MAX_INVITES})\n\n🔗 لینک اختصاصی شما:\n`{ref_link}`"
     await message.answer(text, parse_mode="Markdown")
 
-# --- بخش شارژ حساب ---
 @dp.message(F.text == "💳 شارژ حساب")
 async def deposit_menu(message: Message):
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -160,13 +139,7 @@ async def deposit_menu(message: Message):
 
 @dp.callback_query(F.data == "dep_card")
 async def dep_card_callback(call: types.CallbackQuery, state: FSMContext):
-    text = (
-        f"📌 **شارژ از طریق کارت به کارت**\n\n"
-        f"حداقل مبلغ شارژ: {MIN_CARD_DEPOSIT:,} تومان\n\n"
-        f"💳 شماره کارت:\n`{CARD_NUMBER}`\n"
-        f"👤 به نام: {CARD_HOLDER}\n\n"
-        f"لطفاً پس از واریز، عکس رسید واریز را ارسال کنید:"
-    )
+    text = f"📌 **شارژ کارت به کارت**\nحداقل مبلغ: {MIN_CARD_DEPOSIT:,} تومان\n\n💳 شماره کارت:\n`{CARD_NUMBER}`\n👤 به نام: {CARD_HOLDER}\n\nلطفاً عکس رسید واریز را ارسال کنید:"
     await call.message.answer(text, parse_mode="Markdown")
     await state.set_state(DepositState.waiting_for_card_receipt)
     await call.answer()
@@ -178,13 +151,7 @@ async def process_card_receipt(message: Message, state: FSMContext):
         [InlineKeyboardButton(text="✅ تأیید و شارژ", callback_data=f"approve_dep:{message.from_user.id}")],
         [InlineKeyboardButton(text="❌ رد درخواست", callback_data=f"reject_dep:{message.from_user.id}")]
     ])
-    await bot.send_photo(
-        ADMIN_ID,
-        photo_id,
-        caption=f"📥 **درخواست شارژ کارت به کارت**\nاز کاربر: `{message.from_user.id}`\nنام: {message.from_user.full_name}",
-        reply_markup=kb,
-        parse_mode="Markdown"
-    )
+    await bot.send_photo(ADMIN_ID, photo_id, caption=f"📥 **درخواست شارژ**\nاز کاربر: `{message.from_user.id}`\nنام: {message.from_user.full_name}", reply_markup=kb, parse_mode="Markdown")
     await message.answer("رسید شما ارسال شد. پس از بررسی توسط مدیریت، حساب شما شارژ خواهد شد.")
     await state.clear()
 
@@ -200,26 +167,16 @@ async def process_voucher_code(message: Message, state: FSMContext):
         [InlineKeyboardButton(text="✅ تأیید ووچر", callback_data=f"approve_dep:{message.from_user.id}")],
         [InlineKeyboardButton(text="❌ رد ووچر", callback_data=f"reject_dep:{message.from_user.id}")]
     ])
-    await bot.send_message(
-        ADMIN_ID,
-        f"🎫 **کد ووچر دریافتی**\nاز کاربر: `{message.from_user.id}`\nکد: `{message.text}`",
-        reply_markup=kb,
-        parse_mode="Markdown"
-    )
+    await bot.send_message(ADMIN_ID, f"🎫 **کد ووچر دریافتی**\nاز کاربر: `{message.from_user.id}`\nکد: `{message.text}`", reply_markup=kb, parse_mode="Markdown")
     await message.answer("کد ووچر ثبت شد و برای مدیریت ارسال گردید.")
     await state.clear()
 
 @dp.callback_query(F.data == "dep_ton")
 async def dep_ton_callback(call: types.CallbackQuery):
-    text = (
-        f"💎 **شارژ از طریق ارز دیجیتال (TON)**\n\n"
-        f"آدرس ولت:\n`{TON_WALLET}`\n\n"
-        f"پس از واریز، Hash تراکنش را برای پشتیبانی ارسال کنید."
-    )
+    text = f"💎 **شارژ از طریق ارز دیجیتال (TON)**\n\nآدرس ولت:\n`{TON_WALLET}`\n\nپس از واریز، Hash تراکنش را برای پشتیبانی ارسال کنید."
     await call.message.answer(text, parse_mode="Markdown")
     await call.answer()
 
-# --- بخش مدیریت تأیید شارژ ---
 @dp.callback_query(F.data.startswith("approve_dep:"))
 async def admin_approve_dep(call: types.CallbackQuery, state: FSMContext):
     target_user_id = int(call.data.split(":")[1])
@@ -237,15 +194,13 @@ async def admin_set_dep_amount(message: Message, state: FSMContext):
     try:
         amount = int(message.text)
         update_balance(target_id, amount)
-        add_required_turnover(target_id, amount) # قانون ۱۰۰٪ گردش مالی
-        
+        add_required_turnover(target_id, amount)
         await bot.send_message(target_id, f"✅ حساب شما به مبلغ {amount:,} تومان شارژ شد.\nتوجه: جهت برداشت بایستی معادل این مبلغ بازی کنید.")
         await message.answer(f"حساب کاربر `{target_id}` با موفقیت شارژ شد.")
     except ValueError:
         await message.answer("لطفاً عدد معتبر وارد کنید.")
     await state.clear()
 
-# --- بخش برداشت وجه ---
 @dp.message(F.text == "🏧 برداشت وجه")
 async def withdraw_start(message: Message, state: FSMContext):
     _, balance, turnover, _, _ = get_user(message.from_user.id)
@@ -255,13 +210,12 @@ async def withdraw_start(message: Message, state: FSMContext):
     if balance <= 0:
         await message.answer("موجودی شما برای برداشت کافی نیست.")
         return
-    
     await message.answer(f"💰 موجودی قابل برداشت: {balance:,} تومان\nمبلغ درخواستی برای برداشت را وارد کنید:")
     await state.set_state(WithdrawState.waiting_for_amount)
 
 @dp.message(WithdrawState.waiting_for_amount)
 async def withdraw_amount(message: Message, state: FSMContext):
-    _, balance, turnover, _, _ = get_user(message.from_user.id)
+    _, balance, _, _, _ = get_user(message.from_user.id)
     try:
         amount = int(message.text)
         if amount > balance or amount <= 0:
@@ -278,18 +232,11 @@ async def withdraw_card_info(message: Message, state: FSMContext):
     data = await state.get_data()
     amount = data["w_amount"]
     user_id = message.from_user.id
-    
     update_balance(user_id, -amount)
-    
-    await bot.send_message(
-        ADMIN_ID,
-        f"🏧 **درخواست برداشت جدید**\nکاربر: `{user_id}`\nمبلغ: {amount:,} تومان\nاطلاعات حساب:\n{message.text}",
-        parse_mode="Markdown"
-    )
+    await bot.send_message(ADMIN_ID, f"🏧 **درخواست برداشت جدید**\nکاربر: `{user_id}`\nمبلغ: {amount:,} تومان\nاطلاعات حساب:\n{message.text}", parse_mode="Markdown")
     await message.answer("✅ درخواست برداشت شما ثبت شد و پس از بررسی واریز خواهد شد.")
     await state.clear()
 
-# --- بخش بازی تاس ---
 @dp.message(F.text == "🎲 بازی تاس")
 async def play_dice_menu(message: Message):
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -325,7 +272,6 @@ async def bet_num_selected(call: types.CallbackQuery, state: FSMContext):
 async def process_bet_amount(message: Message, state: FSMContext):
     user_id = message.from_user.id
     _, balance, _, _, _ = get_user(user_id)
-    
     try:
         bet_amount = int(message.text)
         if bet_amount <= 0 or bet_amount > balance:
@@ -336,18 +282,15 @@ async def process_bet_amount(message: Message, state: FSMContext):
         b_type = data["b_type"]
         target_num = data.get("target_num")
         
-        # کسر مبلغ شرط و به‌روزرسانی گردش مالی
         update_balance(user_id, -bet_amount)
         update_turnover(user_id, bet_amount)
         
-        # پرتاب تاس اصلی تلگرام
         dice_msg = await message.answer_dice(emoji="🎲")
         dice_val = dice_msg.dice.value
-        await asyncio.sleep(2.5) # صبر برای پایان انیمیشن تاس
+        await asyncio.sleep(2.5)
         
         win = False
         multiplier = 0
-        
         if b_type == "even" and dice_val % 2 == 0:
             win = True
             multiplier = 2
@@ -369,9 +312,23 @@ async def process_bet_amount(message: Message, state: FSMContext):
     except ValueError:
         await message.answer("لطفاً یک عدد معتبر وارد کنید.")
 
-# --- اجرای ربات ---
+# --- سرور Dummy وب برای رایگان ماندن در Render ---
+async def handle_ping(request):
+    return web.Response(text="Bot is Alive!")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+
 async def main():
+    await start_web_server()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
+    
